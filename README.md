@@ -9,9 +9,7 @@ Runs your tests after code changes, remembers verified states, and flags changed
 
 No signup. No reviewer model. MIT.
 
-<!-- Demo GIF, not rendered yet (example/demo.tape). Uncomment once example/demo.gif exists:
 ![Recorded run: blocked on a red test, repaired, green](example/demo.gif)
--->
 
 ## Install (Claude Code plugin)
 
