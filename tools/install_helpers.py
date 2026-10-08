@@ -3,6 +3,12 @@
 
   install_helpers.py install   --kit DIR --target DIR [--dry-run] [--no-codex]
   install_helpers.py uninstall --kit DIR --target DIR [--dry-run]
+  install_helpers.py setup     --kit DIR --target DIR [--dry-run] [--no-codex] [--session ID]   (plugin edition)
+  install_helpers.py teardown  --kit DIR --target DIR [--dry-run]
+
+The plugin edition (setup/teardown, run by /prove-it-mini:setup and /prove-it-mini:teardown) follows the same
+rules but writes no gate copy and no settings hooks: the plugin's own hooks/hooks.json runs the gate, and only
+in projects where setup completed.
 
 Design: install only into a clean state, as one transaction.
 - The target must be the top level of a git repository. Subfolders and folders outside git are refused.
@@ -22,6 +28,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -315,12 +322,13 @@ def preflight_paths(root: Path) -> None:
         check_path(root, rel, "file")
 
 
-def install(kit: Path, root: Path, dry: bool, codex: bool) -> int:
+def install(kit: Path, root: Path, dry: bool, codex: bool, edition: str = "mini", session: str = "") -> int:
     root = root.resolve()
-    print(f"Installing Prove-It Mini into {root}" + (" (dry run: nothing is changed)" if dry else ""))
+    what = "Setting up the Prove-It Mini plugin in" if edition == "plugin" else "Installing Prove-It Mini into"
+    print(f"{what} {root}" + (" (dry run: nothing is changed)" if dry else ""))
     preflight_paths(root)
     with Lock(root, dry):
-        tx = plan_install(kit, root, dry, codex)
+        tx = plan_install(kit, root, dry, codex, edition)
         try:
             tx.commit()
             if not dry:
@@ -330,10 +338,53 @@ def install(kit: Path, root: Path, dry: bool, codex: bool) -> int:
             if isinstance(exc, Refused):
                 raise
             raise Refused(f"install failed and was rolled back, nothing changed: {exc}")
+    if edition == "plugin" and not dry:
+        record_setup_baseline(kit, root, session)
+    print(f"Test command: {effective_test_cmd(kit, root)} (change it in {CONFIG_REL})")
     return 0
 
 
-def plan_install(kit: Path, root: Path, dry: bool, codex: bool) -> Transaction:
+def effective_test_cmd(kit: Path, root: Path) -> str:
+    """What the gate will run here (env first, then config.json), read by the gate's own code; a kept config
+    prints nothing during planning, so this line is the only place the command is always reported."""
+    old = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True                    # never leave __pycache__ in the kit or plugin folder
+    try:
+        spec = importlib.util.spec_from_file_location("prove_it_gate", kit / "tools" / "pytest_gate.py")
+        gate = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(gate)
+        return gate.load_config(root)["test_cmd"]
+    except Exception as exc:
+        return f"unreadable ({exc})"
+    finally:
+        sys.dont_write_bytecode = old
+
+
+def record_setup_baseline(kit: Path, root: Path, session: str = "") -> None:
+    """Best effort: the gate's baseline as of setup, under "plugin-setup" (for a session whose SessionStart ran
+    while the plugin was off) and, replacing any older one, under the session that ran setup (it may keep a
+    baseline from before a teardown). If this fails, the gate simply runs the tests at that session's next stop."""
+    for sid in ("plugin-setup", *([session] if session else [])):
+        try:
+            subprocess.run([sys.executable, str(kit / "tools" / "pytest_gate.py"), "--baseline", "--refresh"],
+                           input=json.dumps({"session_id": sid}), text=True, capture_output=True, timeout=120,
+                           env=dict(os.environ, CLAUDE_PROJECT_DIR=str(root)))
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+
+def existing_edition(root: Path) -> str:
+    try:
+        return str(json.loads((root / MANIFEST_REL).read_text(encoding="utf-8")).get("edition") or "mini")
+    except (OSError, ValueError, AttributeError):
+        return "mini"
+
+
+def remove_hint(edition: str) -> str:
+    return "/prove-it-mini:teardown" if edition == "plugin" else "./install.sh --uninstall"
+
+
+def plan_install(kit: Path, root: Path, dry: bool, codex: bool, edition: str = "mini") -> Transaction:
     gate_src = kit / "tools" / "pytest_gate.py"
     rule_src = {name: kit / "rules" / name for name in RULES}
     for src in [gate_src, *rule_src.values()]:
@@ -345,16 +396,23 @@ def plan_install(kit: Path, root: Path, dry: bool, codex: bool) -> Transaction:
         except (ValueError, AttributeError):
             status = None
         if status == "pending":
-            raise Refused("a previous install was interrupted; run ./install.sh --uninstall first, then install. "
-                          "Nothing was changed")
+            raise Refused(f"a previous install was interrupted; run {remove_hint(existing_edition(root))} first, "
+                          "then install. Nothing was changed")
     for rel in (GATE_REL, MANIFEST_REL):
         if (root / rel).exists():
-            raise Refused(f"{rel} already exists. To reinstall or upgrade: ./install.sh --uninstall, then install. "
-                          "Nothing was changed")
+            hint = remove_hint(existing_edition(root)) if (root / MANIFEST_REL).exists() else "./install.sh --uninstall"
+            raise Refused(f"{rel} already exists: Prove-It is already installed here. To reinstall or switch between "
+                          f"install.sh and the plugin: {hint}, then install. Nothing was changed")
     settings_path = root / SETTINGS_REL
-    settings = load_settings(settings_path)
-    if hooks_without_kit(settings.get("hooks", {}))[1]:
-        raise Refused(f"{SETTINGS_REL} already contains the Prove-It hooks. Uninstall first. Nothing was changed")
+    try:
+        settings = load_settings(settings_path)
+    except Refused:
+        if edition != "plugin":
+            raise
+        settings = {}                  # setup never writes settings.json, and Claude Code ignores one that won't parse
+    if hooks_without_kit(settings.get("hooks", {}))[1]:   # leftover project hooks would run the gate a second time
+        raise Refused(f"{SETTINGS_REL} already contains the Prove-It hooks. Uninstall first (./install.sh "
+                      "--uninstall; if that refuses, delete the two prove-it hook entries by hand). Nothing was changed")
     managed_rules = list(RULES if codex else RULES[:1])
     rules_text = {}
     for name in managed_rules:
@@ -375,10 +433,12 @@ def plan_install(kit: Path, root: Path, dry: bool, codex: bool) -> Transaction:
 
     tx = Transaction(root, dry)
     gate_bytes = gate_src.read_bytes()
-    created_settings = not settings_path.exists()
-    manifest = {"version": 4, "edition": "mini", "status": "pending", "files": {GATE_REL: sha256_bytes(gate_bytes)},
+    plugin = edition == "plugin"                       # the plugin brings its own gate and hooks
+    created_settings = not settings_path.exists() and not plugin
+    manifest = {"version": 4, "edition": edition, "status": "pending",
+                "files": {} if plugin else {GATE_REL: sha256_bytes(gate_bytes)},
                 "created_settings": created_settings, "rules": managed_rules,
-                "hooks": [{"event": e, "hook": h} for e, h in KIT_HOOKS]}
+                "hooks": [] if plugin else [{"event": e, "hook": h} for e, h in KIT_HOOKS]}
     # written FIRST: if the installer is killed midway, uninstall still knows what may have been installed
     tx.write(root / MANIFEST_REL, (json.dumps(manifest, indent=1) + "\n").encode(), f"{MANIFEST_REL} (pending)", 0o644)
     if exclude is not None:
@@ -388,7 +448,8 @@ def plan_install(kit: Path, root: Path, dry: bool, codex: bool) -> Transaction:
                      "git exclude: .prove-it/")
     if exclude is not None:
         tx.verify("check that git ignores .prove-it/ (before any gate file or hook exists)")
-    tx.write(root / GATE_REL, gate_bytes, GATE_REL, 0o644)
+    if not plugin:
+        tx.write(root / GATE_REL, gate_bytes, GATE_REL, 0o644)
     if not (root / CONFIG_REL).exists():
         test_cmd = "python3 -m pytest -q"
         for venv in (".venv", "venv"):
@@ -397,11 +458,12 @@ def plan_install(kit: Path, root: Path, dry: bool, codex: bool) -> Transaction:
                 break
         tx.write(root / CONFIG_REL, (json.dumps({"test_cmd": test_cmd, "timeout": 300}, indent=2) + "\n").encode(),
                  f"{CONFIG_REL} (test command: {test_cmd})", 0o644)
-    hooks = dict(settings.get("hooks", {}))
-    for event, hook in KIT_HOOKS:
-        hooks.setdefault(event, []).append({"hooks": [dict(hook)]})
-    tx.write(settings_path, (json.dumps(dict(settings, hooks=hooks), indent=2, ensure_ascii=False) + "\n").encode(),
-             SETTINGS_REL)
+    if not plugin:
+        hooks = dict(settings.get("hooks", {}))
+        for event, hook in KIT_HOOKS:
+            hooks.setdefault(event, []).append({"hooks": [dict(hook)]})
+        tx.write(settings_path, (json.dumps(dict(settings, hooks=hooks), indent=2, ensure_ascii=False) + "\n").encode(),
+                 SETTINGS_REL)
     for name, text in rules_text.items():
         block = rule_src[name].read_text(encoding="utf-8").strip() + "\n"
         tx.write(root / name, ((text.rstrip("\n") + "\n\n" if text.strip() else "") + block).encode(), name)
@@ -458,7 +520,8 @@ def plan_uninstall(root: Path, dry: bool) -> Transaction:
     for rel in files:
         check_path(root, rel, "file")
     settings_path = root / SETTINGS_REL
-    settings = load_settings(settings_path)
+    # a plugin setup never adds settings hooks (and refuses leftover ones), so its teardown never reads the file
+    settings = {} if manifest.get("edition") == "plugin" else load_settings(settings_path)
     new_hooks, removed = hooks_without_kit(settings.get("hooks", {}))
     spans = {}
     for name in rules:
@@ -502,14 +565,16 @@ def plan_uninstall(root: Path, dry: bool) -> Transaction:
 def main(argv: list[str]) -> int:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="action", required=True)
-    for name in ("install", "uninstall"):
+    for name in ("install", "uninstall", "setup", "teardown"):
         s = sub.add_parser(name)
         s.add_argument("--kit", required=True)
         s.add_argument("--target", required=True)
         s.add_argument("--dry-run", action="store_true")
-        if name == "install":
+        if name in ("install", "setup"):
             s.add_argument("--edition", default="mini", choices=["mini"])
             s.add_argument("--no-codex", action="store_true")
+        if name == "setup":
+            s.add_argument("--session", default="", help="session that runs setup (its baseline is refreshed)")
     a = p.parse_args(argv[1:])
     kit, target = Path(a.kit).resolve(), Path(a.target)
     if not target.is_dir():
@@ -521,6 +586,8 @@ def main(argv: list[str]) -> int:
     try:
         if a.action == "install":
             return install(kit, target, a.dry_run, not a.no_codex)
+        if a.action == "setup":
+            return install(kit, target, a.dry_run, not a.no_codex, edition="plugin", session=a.session)
         return uninstall(kit, target, a.dry_run)
     except Refused as exc:
         print(f"REFUSED: {exc}", file=sys.stderr)

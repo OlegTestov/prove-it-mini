@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prove-It pytest gate: the agent cannot finish while your tests fail.
+"""Prove-It pytest gate: runs your tests when the agent tries to finish, with at most 2 repair attempts.
 
 Claude Code runs this as a Stop hook (when the agent is about to say "done").
   0. At session start (SessionStart hook, --baseline) it records the content of every relevant file
@@ -17,6 +17,7 @@ Config (environment first, then .claude/prove-it/config.json):
   PROVE_IT_GATE_DISABLE=1          switch the hook off (a manual --check still runs the tests)
 The number of fix cycles is fixed at 2.
 Manual run (always runs the tests): python3 pytest_gate.py --check   exit 0 green, 1 red, 2 error
+As a Claude Code plugin hook (--plugin) it does nothing unless /prove-it-mini:setup completed in the project.
 """
 from __future__ import annotations
 
@@ -40,6 +41,7 @@ import time
 from pathlib import Path
 
 MAX_CYCLES = 2
+SETUP_SESSION = "plugin-setup"   # baseline recorded by /prove-it-mini:setup at the moment the gate was turned on
 HOOK_TIMEOUT = 600          # the installed Stop hook's timeout
 MAX_TEST_TIMEOUT = 570      # the inner test run must end (and be cleaned up) before the hook is killed
 DEFAULT_WATCH = ["*.py", "pyproject.toml", "setup.cfg", "setup.py", "pytest.ini", "tox.ini", "requirements*.txt",
@@ -230,6 +232,15 @@ def in_git(root: Path) -> bool:
     return r.returncode == 0 and r.stdout.strip() == "true"
 
 
+def git_top(path: Path) -> Path | None:
+    try:
+        r = subprocess.run(["git", "-C", str(path), "rev-parse", "--show-toplevel"], capture_output=True,
+                           text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return Path(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
+
+
 def all_files(root: Path) -> list[str]:
     if in_git(root):
         out = git_strict(root, "ls-files", "-z", "--cached", "--others", "--exclude-standard")
@@ -285,7 +296,8 @@ def content_hash(root: Path, rel: str) -> str:
         data = target.read_bytes()
     except OSError:
         return unverifiable
-    prefix = "link:" if target != Path(os.path.abspath(root / rel)) else ""
+    # judged against the real root, so the same repo reached by another path (/tmp vs /private/tmp) hashes alike
+    prefix = "link:" if target != real_root / rel else ""
     return prefix + hashlib.sha256(data).hexdigest()
 
 
@@ -397,7 +409,8 @@ class State:
                 data["baseline_seq"] = int(data.get("baseline_seq", 0) or 0) + 1   # strictly increasing
                 self.s["baseline"]["seq"] = data["baseline_seq"]
                 self._new_baseline = False
-            data["sessions"][self.session] = self.s
+            data["sessions"].pop(self.session, None)              # re-insert last: the cut below keeps
+            data["sessions"][self.session] = self.s               # the 50 most recently USED sessions
             data["sessions"] = dict(list(data["sessions"].items())[-50:])
             data["known_red"] = dict(list(data["known_red"].items())[-200:])
             data["red_hist"] = dict(list(data["red_hist"].items())[-200:])
@@ -406,6 +419,14 @@ class State:
         finally:
             os.close(lock_fd)
         return accepted
+
+    def touch(self) -> None:
+        """Best effort: mark this session as recently used, so 50 newer sessions don't evict its baseline."""
+        if self.session in self._load()["sessions"] or self.s.get("baseline"):
+            try:
+                self.save()
+            except OSError:
+                pass
 
     def log(self, event: dict) -> None:
         event = {"time": now(), "session": self.session, **event}
@@ -495,14 +516,17 @@ def failure_summary(output: str, lines: int = 60) -> str:
 
 # ---------- decisions ----------
 
-def record_baseline(root: Path, session: str) -> None:
-    """SessionStart: remember the state the session started from (the first successful call wins)."""
+def record_baseline(root: Path, session: str, refresh: bool = False) -> None:
+    """SessionStart: remember the state the session started from (the first successful call wins).
+    refresh=True (used by setup) replaces it: the gate starts judging from the moment it was turned on."""
     st = State(root, session)
     try:
-        if not st.s.get("baseline"):
+        if not st.s.get("baseline") or session == SETUP_SESSION or refresh:
             cfg = load_config(root)
             fp, tests = snapshot(root, cfg)
             st.s["baseline"] = {"fp": fp, "tests": tests, "time": now()}
+            if refresh:
+                st.s["blocks"] = 0                     # the gate was just turned on: a fresh repair budget
             st._new_baseline = True
             st.save()
     finally:
@@ -543,6 +567,11 @@ def _decide(root: Path, st: State, manual: bool) -> dict:
     cfg = load_config(root)
     fp, tests = snapshot(root, cfg)
     own = st.s.get("baseline") if isinstance(st.s.get("baseline"), dict) else None
+    if own is None and not manual:
+        # the session that ran /prove-it-mini:setup had no SessionStart baseline (the plugin was off then):
+        # compare against the state recorded when setup finished; no baseline at all still means "run the tests"
+        entry = st._load()["sessions"].get(SETUP_SESSION)
+        own = entry.get("baseline") if isinstance(entry, dict) and isinstance(entry.get("baseline"), dict) else None
     baseline = st.latest_baseline() if manual else own
 
     def touched_now(test_hashes: dict) -> list:
@@ -551,9 +580,11 @@ def _decide(root: Path, st: State, manual: bool) -> dict:
     touched = touched_now(tests)
     if not manual:
         if own and own.get("fp") == fp:                # nothing relevant changed in this session: no test run
+            st.touch()
             note = edit_note(touched)
             return {"systemMessage": "Prove-It gate: no relevant change, no test run." + note} if note else {}
         if st.is_green(fp):                            # this exact state passed and nothing failed it since
+            st.touch()
             note = edit_note(touched)
             return {"systemMessage": "Prove-It gate: this state already passed (no new test run)." + note} if note else {}
     changed_during, no_time, ran = False, False, False
@@ -674,6 +705,24 @@ def _decide(root: Path, st: State, manual: bool) -> dict:
         f"Do not claim the task is done while tests fail.{warn}\n\n{failure_summary(out)}")}
 
 
+def plugin_opted_in(root: Path) -> bool:
+    """Plugin hooks run in every project. They act only where `/prove-it-mini:setup` completed: a regular-file
+    manifest with edition "plugin" and status "complete", plus the config. Anything else (no setup, a project
+    install by install.sh that runs its own hooks, a config left behind by an uninstall, any error) = no-op."""
+    base = root / ".claude" / "prove-it"
+    try:
+        for name in ("install-manifest.json", "config.json"):
+            if not stat.S_ISREG(os.lstat(base / name).st_mode):
+                return False
+        fd = os.open(base / "install-manifest.json", os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "r", encoding="utf-8") as f:
+            manifest = json.loads(f.read(1_000_000))
+        return isinstance(manifest, dict) and manifest.get("edition") == "plugin" \
+            and manifest.get("status") == "complete"
+    except (OSError, ValueError):
+        return False
+
+
 def main(argv: list[str]) -> int:
     manual = "--check" in argv
     if os.environ.get("PROVE_IT_GATE_DISABLE", "").lower() in {"1", "true", "yes", "on"}:
@@ -689,10 +738,14 @@ def main(argv: list[str]) -> int:
         except ValueError:
             payload = {}
     root = Path(os.environ.get("CLAUDE_PROJECT_DIR") or payload.get("cwd") or os.getcwd())
+    if manual and not os.environ.get("CLAUDE_PROJECT_DIR"):
+        root = git_top(root) or root                   # /prove-it-mini:check may run from a subfolder
+    if "--plugin" in argv and not manual and not plugin_opted_in(root):
+        return 0                                       # plugin hook in a project that didn't run setup: do nothing
     session = "manual" if manual else str(payload.get("session_id", "unknown"))
     try:
         if "--baseline" in argv:
-            record_baseline(root, session)
+            record_baseline(root, session, "--refresh" in argv)
             return 0
         result = decide(root, session, manual)
     except Terminated:

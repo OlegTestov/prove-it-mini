@@ -1,0 +1,26 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/tools/pytest_gate.py\" --plugin",
+            "timeout": 600
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/tools/pytest_gate.py\" --baseline --plugin",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -38,6 +38,6 @@ cat <<'NEXT'
 Installed. Next:
   1. Check the test command in .claude/prove-it/config.json, then run:
        python3 .claude/prove-it/pytest_gate.py --check
-  2. Restart Claude Code in this folder. From now on it cannot finish while pytest fails.
+  2. Restart Claude Code in this folder. From now on, when it tries to finish after changing code, pytest runs (at most 2 repair attempts).
   3. Test runs are logged (best-effort) in .prove-it/gate-log.md.
 NEXT

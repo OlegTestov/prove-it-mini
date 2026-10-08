@@ -1,0 +1,15 @@
+{
+  "name": "prove-it-mini",
+  "description": "A pytest Stop hook for Claude Code: two repair attempts, then an explicit unverified result.",
+  "owner": {
+    "name": "Oleg Testov",
+    "url": "https://github.com/OlegTestov"
+  },
+  "plugins": [
+    {
+      "name": "prove-it-mini",
+      "source": "./",
+      "description": "Runs your tests after code changes, remembers verified states, and flags changed tests."
+    }
+  ]
+}

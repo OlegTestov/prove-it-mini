@@ -1,14 +1,77 @@
-# Prove-It Mini: your AI agent can't say "done" while pytest fails
+# Prove-It Mini
 
-A Claude Code Stop hook for Python projects. When the agent tries to finish after changing code, it runs your tests. Red tests send the agent back with the failure, at most 2 times. If it's still red after that, the agent may stop, but you see a "NOT verified" warning. Test runs are logged (best-effort).
+A pytest Stop hook for Claude Code: two repair attempts, then an explicit unverified result.
 
-Coding agents often report "done" on code that fails the project's own tests. This hook makes the test suite, not the agent's confidence, decide when a task is finished.
+Runs your tests after code changes, remembers verified states, and flags changed tests.
+- When the agent tries to finish after changing code, Mini runs your test command.
+- Red tests block the stop and hand the failure back to the agent, at most 2 times.
+- If the tests are still red after that, the agent may stop, and you see "NOT verified" instead of a quiet "done".
 
-**See it catch a real false "done":** [example/EXAMPLE.md](example/EXAMPLE.md).
+No signup. No reviewer model. MIT.
 
-## Install (3 minutes)
+<!-- Demo GIF, not rendered yet (example/demo.tape). Uncomment once example/demo.gif exists:
+![Recorded run: blocked on a red test, repaired, green](example/demo.gif)
+-->
 
-Requirements: macOS or Linux (Windows via WSL), git, Python 3.9+, pytest in your project, Claude Code.
+## Install (Claude Code plugin)
+
+In Claude Code, inside your Python repo:
+
+```
+/plugin marketplace add OlegTestov/prove-it-mini
+/plugin install prove-it-mini@prove-it-mini
+/prove-it-mini:setup
+```
+
+Run `/prove-it-mini:setup` once in each repo you want gated: the plugin does nothing in repos that didn't run it. If the command doesn't show up right after the install, restart Claude Code. Requirements: macOS or Linux (Windows via WSL), git, Python 3.9+, pytest in your project.
+
+**Limits:** passing tests don't prove the code is correct. Test edits are flagged, but Mini can't prevent them.
+
+Useful on your repo? Star it, or report a failure case.
+
+## Before / after
+
+From the [recorded example](example/EXAMPLE.md) (Claude Haiku 4.5, one new requirement only in the tests; the prompt told the agent not to look at the tests):
+
+```
+without:  agent> Done. I've added the HALF discount code to shop/pricing.py.    # 1 of 3 new tests fails
+with:     agent> Done. I've added the HALF discount code to shop/pricing.py.
+          gate>  you cannot finish yet. Tests fail (exit 1). ... test_codes_are_case_insensitive
+          agent> (reads the failure, makes codes case-insensitive, runs the tests)
+          gate>  tests green (1.5s): the agent may finish
+log:      BLOCKED cycle 1/2 -> PASS. Cost of the catch: one fix cycle, 13 seconds.
+```
+
+## Similar tools
+
+Facts from their READMEs as of 07.10.2026; "—" means the README doesn't cover it.
+
+| | Prove-It Mini | [Nonna](https://github.com/kapadias/nonna) | [TDD Guard](https://github.com/nizos/tdd-guard) | [Probity](https://github.com/nizos/probity) |
+|---|---|---|---|---|
+| When it checks | when the agent tries to finish after changing code | same, plus git commit/push and file access | when the agent changes code | before every file write and shell command |
+| What it checks | your test command passes | your test command passes; branch and secret guards | TDD: a failing test first | your rules (TDD, patterns, custom) |
+| After a red run | blocks up to 2 times, then "NOT verified" | blocks once, then tells the agent to say it is not done | — | — |
+| Changed test files | named in every result | rules forbid weakening; "no gate checks yet" | — | — |
+| Model calls | none | none | yes | none for pattern rules; AI rules optional |
+| Agents | Claude Code (Codex: AGENTS.md only) | Claude Code; Codex and Copilot plugins (not yet run end to end); rules for others | Claude Code | Claude Code, Codex, Copilot CLI |
+
+Nonna does more (git hooks, secret and branch guards, many agents). Mini does one thing: the pytest check at the end of a turn, with bounded retries and named test edits. TDD Guard and Probity enforce a way of working on each action; TDD Guard's README recommends Probity for new projects.
+
+**Codex:** Mini currently integrates with Codex through AGENTS.md instructions. It does not install Codex's native Stop hook. The `AGENTS.md` block tells Codex to run `pytest_gate.py --check` and paste the output before reporting done; Mini can't enforce that.
+
+<details>
+<summary>What plugin setup does</summary>
+
+`/prove-it-mini:setup` runs the same installer code as `install.sh`, with the same clean-state rules and the same all-or-nothing transaction (see below). It writes `.claude/prove-it/config.json`, the rules block in `CLAUDE.md` and `AGENTS.md`, the manifest (marked as a plugin setup), and the `.prove-it/` line in git's `info/exclude`. It doesn't copy the gate and doesn't touch `.claude/settings.json`: the plugin brings its own hooks.
+
+- The plugin's hooks act only in a repo whose manifest says the plugin setup completed. Everywhere else they exit at once without writing anything. A `config.json` left behind by an uninstall doesn't turn them on.
+- The session that runs setup isn't blocked by tests that were already red: setup records the state at that moment, also for a session that ran teardown earlier. The gate runs the tests only after the code changes.
+- `/prove-it-mini:check` runs your tests now. `/prove-it-mini:teardown` removes what setup added, like `install.sh --uninstall`.
+- Use either the plugin or `install.sh` in a repo, not both: each refuses while the other is installed. Setup also refuses while `.claude/settings.json` still holds Prove-It hook entries from an earlier `install.sh`.
+
+</details>
+
+## Install without the plugin (install.sh)
 
 ```sh
 git clone https://github.com/OlegTestov/prove-it-mini && cd prove-it-mini
@@ -19,7 +82,9 @@ python3 .claude/prove-it/pytest_gate.py --check   # always runs your tests: exit
 
 Then restart Claude Code in the repo.
 
-### What the installer does, and what it refuses
+<details>
+<summary>What the installer does, and what it refuses</summary>
+
 
 It installs only into a clean state, at the top level of a git repository (subfolders and folders outside git are refused), as one transaction. It never overwrites a file you own, so nothing needs a backup. It adds:
 
@@ -53,6 +118,8 @@ The manifest is written first, marked "pending", and marked "complete" at the en
 
 It never copies files back and only touches the paths above. Your `config.json` and the `.prove-it/` log stay.
 
+</details>
+
 ## How it decides
 
 - At session start it records the SHA-256 of every relevant file's working-tree bytes, the test command, and the content of every test file.
@@ -77,9 +144,8 @@ Log: test runs are logged best-effort in `.prove-it/gate-log.md` (readable) and 
 
 Settings: edit `.claude/prove-it/config.json` (`test_cmd`, `timeout`, `watch`), or use the env vars `PROVE_IT_TEST_CMD`, `PROVE_IT_TIMEOUT`, `PROVE_IT_WATCH`. `PROVE_IT_GATE_DISABLE=1` switches the hook off.
 
-**Codex:** Codex CLI has no Stop hook. The `AGENTS.md` block tells Codex to run `pytest_gate.py --check` and paste the output before reporting done. That's an instruction to Codex, not something Mini can enforce.
-
 **Limits:**
+- Passing tests don't prove the code is correct: Mini checks only what your tests check.
 - The gate makes test edits visible but can't stop a determined agent from weakening a test.
 - Threat model: Mini does not defend against another local process that concurrently swaps folders for symlinks or plants special files in the repository while the installer or the gate is running.
 - Native Windows is not tested.
@@ -90,6 +156,6 @@ Settings: edit `.claude/prove-it/config.json` (`test_cmd`, `timeout`, `watch`), 
 
 ## Prove-It Pro
 
-Pro is planned and not on sale. To hear when it ships: Watch → Custom → Releases on this repo.
+Pro is planned and not on sale: a verification report and mutation checks for changed Python code. To hear when it ships: Watch → Custom → Releases on this repo.
 
 License: MIT (see `LICENSE`).

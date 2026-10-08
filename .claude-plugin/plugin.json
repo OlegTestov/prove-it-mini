@@ -1,0 +1,14 @@
+{
+  "name": "prove-it-mini",
+  "displayName": "Prove-It Mini",
+  "version": "1.0.0",
+  "description": "A pytest Stop hook for Claude Code: two repair attempts, then an explicit unverified result. No model calls, no Node.",
+  "author": {
+    "name": "Oleg Testov",
+    "url": "https://github.com/OlegTestov"
+  },
+  "homepage": "https://github.com/OlegTestov/prove-it-mini",
+  "repository": "https://github.com/OlegTestov/prove-it-mini",
+  "license": "MIT",
+  "keywords": ["pytest", "testing", "stop-hook", "verification", "python"]
+}

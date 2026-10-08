@@ -1,0 +1,481 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prove It</title>
+<meta name="description" content="A pytest Stop hook for Claude Code: two repair attempts, then an explicit unverified result. Runs your tests after code changes, remembers verified states, and flags changed tests. Free, MIT.">
+<link rel="preload" href="fonts/bricolage-grotesque-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/ibm-plex-sans-latin.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d6b58'/%3E%3Cpath d='M9 16.5l4.5 4.5L23 11' stroke='white' stroke-width='3.2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<style>
+  /* Self-hosted (SIL OFL 1.1, see fonts/LICENSE-FONTS.txt): no requests to third-party font servers. */
+  @font-face { font-family: "Bricolage Grotesque"; src: url("fonts/bricolage-grotesque-latin.woff2") format("woff2");
+    font-weight: 200 800; font-style: normal; font-display: swap; }
+  @font-face { font-family: "IBM Plex Sans"; src: url("fonts/ibm-plex-sans-latin.woff2") format("woff2");
+    font-weight: 100 700; font-style: normal; font-display: swap; }
+  @font-face { font-family: "IBM Plex Mono"; src: url("fonts/ibm-plex-mono-400-latin.woff2") format("woff2");
+    font-weight: 400; font-style: normal; font-display: swap; }
+  @font-face { font-family: "IBM Plex Mono"; src: url("fonts/ibm-plex-mono-500-latin.woff2") format("woff2");
+    font-weight: 500; font-style: normal; font-display: swap; }
+  :root {
+    --bg: #f5f7f5;
+    --surface: #ffffff;
+    --sunk: #eaeeeb;
+    --fg: #14201b;
+    --muted: #55645d;
+    --line: #d6ded9;
+    --accent: #0d6b58;
+    --accent-fg: #ffffff;
+    --term-bg: #0f1714;
+    --term-fg: #d7e2dc;
+    --term-dim: #8a9a92;
+    --red: #b4372b;
+    --green: #2f7d4f;
+    --term-red: #ff8a7a;
+    --term-green: #7fd49b;
+    --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+    --font-text: "IBM Plex Sans", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    --radius: 10px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1412;
+      --surface: #161d1a;
+      --sunk: #1c2521;
+      --fg: #e6ece8;
+      --muted: #9aaaa2;
+      --line: #2a3530;
+      --accent: #4cc2a2;
+      --accent-fg: #06231b;
+      --term-bg: #0a0f0d;
+      --term-fg: #d7e2dc;
+      --term-dim: #7f8f87;
+      --red: #ff8a7a;
+      --green: #7fd49b;
+      --term-red: #ff8a7a;
+      --term-green: #7fd49b;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1412;
+    --surface: #161d1a;
+    --sunk: #1c2521;
+    --fg: #e6ece8;
+    --muted: #9aaaa2;
+    --line: #2a3530;
+    --accent: #4cc2a2;
+    --accent-fg: #06231b;
+    --term-bg: #0a0f0d;
+    --term-fg: #d7e2dc;
+    --term-dim: #7f8f87;
+    --red: #ff8a7a;
+    --green: #7fd49b;
+    --term-red: #ff8a7a;
+    --term-green: #7fd49b;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 17px/1.6 var(--font-text);
+  }
+  a { color: var(--accent); }
+  a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible {
+    outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 4px;
+  }
+  code, pre, .mono { font-family: var(--font-mono); }
+  code { font-size: 0.9em; background: var(--sunk); padding: 0.1em 0.35em; border-radius: 4px; }
+  h1, h2, h3 { font-family: var(--font-display); line-height: 1.15; text-wrap: balance; margin: 0; }
+  h1 { font-size: clamp(1.9rem, 3.6vw, 2.7rem); font-weight: 800; letter-spacing: -0.02em; }  /* the full positioning line */
+  h2 { font-size: clamp(1.5rem, 3vw, 2.1rem); font-weight: 800; letter-spacing: -0.01em; }
+  h3 { font-size: 1.15rem; font-weight: 600; }
+  p { margin: 0; }
+  .wrap { width: 100%; max-width: 1080px; margin: 0 auto; padding: 0 16px; }
+  @media (min-width: 720px) { .wrap { padding: 0 28px; } }
+  section { padding: 64px 0; border-top: 1px solid var(--line); }
+  .label {
+    font: 600 0.75rem/1 var(--font-text); letter-spacing: 0.12em; text-transform: uppercase;
+    color: var(--muted); margin-bottom: 14px;
+  }
+  .lede { color: var(--muted); max-width: 62ch; }
+
+  /* header */
+  header .wrap { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding-top: 18px; padding-bottom: 18px; }
+  .brand { display: flex; align-items: center; gap: 10px; font: 800 1.2rem/1 var(--font-display); color: var(--fg); text-decoration: none; }
+  .brand svg { width: 28px; height: 28px; }
+  nav { display: flex; gap: 20px; font-size: 0.95rem; }
+  nav a { color: var(--muted); text-decoration: none; }
+  nav a:hover { color: var(--fg); }
+  @media (max-width: 560px) { nav .opt { display: none; } }
+
+  /* hero */
+  .hero { padding: 40px 0 64px; border-top: 0; }
+  .hero .wrap { display: grid; gap: 40px; grid-template-columns: 1fr; align-items: start; }
+  @media (min-width: 960px) { .hero .wrap { grid-template-columns: 1fr 1.08fr; } }
+  .hero-copy { display: grid; gap: 22px; }
+  .hero-copy .lede { font-size: 1.12rem; }
+  .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    min-height: 46px; padding: 0 20px; border-radius: 8px; border: 1.5px solid var(--accent);
+    font: 600 1rem/1 var(--font-text); text-decoration: none; cursor: pointer;
+  }
+  .btn-primary { background: var(--accent); color: var(--accent-fg); }
+  .btn-ghost { background: transparent; color: var(--accent); }
+  .btn:hover { filter: brightness(1.06); }
+  .fine { font-size: 0.88rem; color: var(--muted); }
+
+  .term {
+    background: var(--term-bg); color: var(--term-fg); border-radius: var(--radius);
+    font: 13px/1.6 var(--font-mono); overflow: hidden; border: 1px solid var(--line);
+  }
+  .term-bar { display: flex; justify-content: space-between; gap: 12px; padding: 10px 14px; border-bottom: 1px solid #23302b; color: var(--term-dim); font-size: 12px; }
+  .term pre { margin: 0; padding: 14px 16px 16px; overflow-x: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .t-dim { color: var(--term-dim); }
+  .t-red { color: var(--term-red); }
+  .t-green { color: var(--term-green); }
+  .t-say { color: #e9d9a6; }
+  .term figcaption { padding: 0 16px 14px; color: var(--term-dim); font: 12px/1.5 var(--font-text); }
+
+  /* steps */
+  .steps { display: grid; gap: 28px; grid-template-columns: 1fr; margin-top: 32px; counter-reset: s; list-style: none; padding: 0; }
+  @media (min-width: 760px) { .steps { grid-template-columns: repeat(2, 1fr); } }
+  .steps li { counter-increment: s; display: grid; grid-template-columns: 40px 1fr; gap: 6px 14px; }
+  .steps li::before {
+    content: counter(s); grid-row: span 2; width: 32px; height: 32px; border-radius: 50%;
+    display: grid; place-items: center; background: var(--sunk); color: var(--accent);
+    font: 800 1rem/1 var(--font-display);
+  }
+  .steps p { color: var(--muted); }
+
+  /* study */
+  .study { display: grid; gap: 32px; grid-template-columns: 1fr; margin-top: 28px; align-items: center; }
+  @media (min-width: 860px) { .study { grid-template-columns: 1.1fr 1fr; } }
+  .bars { display: grid; gap: 18px; }
+  .bar-row { display: grid; gap: 6px; }
+  .bar-head { display: flex; justify-content: space-between; gap: 12px; font-size: 0.92rem; }
+  .bar-head b { font-variant-numeric: tabular-nums; font-family: var(--font-mono); font-weight: 500; }
+  .track { height: 12px; background: var(--sunk); border-radius: 6px; overflow: hidden; display: flex; }
+  .fill { height: 100%; border-radius: 6px; }
+  .fill.before { background: var(--muted); }
+  .fill.down { background: var(--red); }
+  .fill.up { background: var(--green); }
+
+  /* compare */
+  .table-scroll { overflow-x: auto; margin-top: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; min-width: 560px; font-size: 0.95rem; }
+  th, td { padding: 12px 16px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+  th { font-weight: 600; background: var(--sunk); }
+  tr:last-child td { border-bottom: 0; }
+  td.c, th.c { text-align: center; width: 110px; }
+  .yes { color: var(--green); font-weight: 600; }
+  .no { color: var(--muted); }
+
+  /* pricing */
+  .plans { display: grid; gap: 20px; grid-template-columns: 1fr; margin-top: 28px; }
+  @media (min-width: 760px) { .plans { grid-template-columns: 1fr 1fr; } }
+  .plan { display: grid; gap: 16px; align-content: start; padding: 26px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+  .plan.pro { border: 2px solid var(--accent); }
+  .price { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .price .amount { font: 800 2.6rem/1 var(--font-display); }
+  .plan ul { margin: 0; padding-left: 1.1em; display: grid; gap: 6px; }
+  .plan .btn { width: 100%; }
+  .pill { display: inline-block; font: 600 0.72rem/1 var(--font-text); letter-spacing: 0.08em; text-transform: uppercase; padding: 6px 9px; border-radius: 999px; background: var(--sunk); color: var(--accent); justify-self: start; }
+
+  /* fake door panel */
+  dialog {
+    width: min(520px, calc(100% - 32px)); border: 1px solid var(--line); border-radius: var(--radius);
+    background: var(--surface); color: var(--fg); padding: 0;
+  }
+  dialog::backdrop { background: rgba(8, 14, 12, 0.55); }
+  .panel { display: grid; gap: 16px; padding: 26px; }
+  .panel form { display: grid; gap: 10px; }
+  .panel label { font-weight: 600; font-size: 0.95rem; }
+  .panel input[type="email"] {
+    width: 100%; min-height: 46px; padding: 0 14px; font: 1rem var(--font-text);
+    border: 1.5px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--fg);
+  }
+  .panel .row { display: flex; gap: 10px; flex-wrap: wrap; }
+  .panel .row .btn { flex: 1 1 160px; }
+  .status { min-height: 1.4em; font-size: 0.95rem; }
+  .status.ok { color: var(--green); }
+  .status.err { color: var(--red); }
+  .hp { position: absolute; left: -10000px; width: 1px; height: 1px; overflow: hidden; }
+
+  /* faq */
+  details { border-bottom: 1px solid var(--line); padding: 14px 0; }
+  details:first-of-type { border-top: 1px solid var(--line); }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { color: var(--muted); margin-top: 8px; max-width: 70ch; }
+  .faq { margin-top: 24px; }
+
+  footer { border-top: 1px solid var(--line); padding: 32px 0 48px; }
+  footer .wrap { display: grid; gap: 8px; color: var(--muted); font-size: 0.9rem; }
+
+  @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <a class="brand" href="#top" aria-label="Prove It home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7" fill="currentColor" style="color: var(--accent)"/><path d="M9 16.5l4.5 4.5L23 11" stroke="var(--accent-fg)" stroke-width="3.2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      Prove It
+    </a>
+    <nav aria-label="Sections">
+      <a class="opt" href="#how">How it works</a>
+      <a class="opt" href="#compare">Mini vs Pro</a>
+      <a href="#pricing">Get it</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <div class="wrap">
+      <div class="hero-copy">
+        <p class="label">For Python projects using Claude Code</p>
+        <h1>A pytest Stop hook for Claude Code: two repair attempts, then an explicit unverified result.</h1>
+        <p class="lede">Runs your tests after code changes, remembers verified states, and flags changed tests. Red tests send the agent back with the failure, at most 2 times. After that you see “NOT verified” instead of a quiet “done”. No signup. No reviewer model.</p>
+        <div class="ctas">
+          <a class="btn btn-primary" id="get-mini" href="https://github.com/OlegTestov/prove-it-mini">Get Mini · free, MIT</a>
+          <a class="btn btn-ghost" href="#pricing">See Pro</a>
+        </div>
+        <p class="fine">Requirements: macOS or Linux (Windows via WSL), git, Python 3.9+, pytest, Claude Code. No extra Python packages for the kit itself.</p>
+      </div>
+
+      <figure class="term" aria-label="Recorded run: the gate catches a false done">
+        <div class="term-bar"><span>recorded run · Claude Haiku 4.5</span><span>06.10.2026</span></div>
+<pre><span class="t-dim">agent:</span> <span class="t-say">Done. I've added the HALF discount code
+  to shop/pricing.py. It applies 50% off for
+  orders with subtotal over 100. […]</span>
+
+<span class="t-dim">Stop hook ▸</span> <span class="t-red">Prove-It gate: you cannot finish
+  yet. Tests fail (exit 1).</span>
+  Command: `.venv/bin/python -m pytest -q`.
+  Fix the code so the tests pass
+  (fix cycle 1 of 2), then finish.
+
+  ..F..                                [100%]
+  <span class="t-red">_____ test_codes_are_case_insensitive _____</span>
+      def test_codes_are_case_insensitive():
+  &gt;       assert order_total([(150.0, 1)],
+                             "half") == 75.0
+  <span class="t-red">E       AssertionError</span>
+
+<span class="t-dim">.prove-it/gate-log.md (shortened)</span>
+- 21:07:08 <span class="t-red">BLOCKED</span> cycle 1/2: failing:
+    test_codes_are_case_insensitive
+- 21:07:21 <span class="t-green">PASS</span> tests green (1.5s)</pre>
+        <figcaption>Lines shortened to fit; full log in Mini’s example. The prompt told the agent not to look at the tests, to act like a hurried one. One requirement lived only in the tests: discount codes are case-insensitive. </figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="how">
+    <div class="wrap">
+      <p class="label">How the gate decides</p>
+      <h2>A hook, not a prompt the agent can skip.</h2>
+      <ol class="steps">
+        <li><h3>Remembers where the session started</h3><p>At session start it records the content of your code files and the test command. Changing code counts whether you commit it or not, so committing red code doesn’t get past it.</p></li>
+        <li><h3>Runs only when code changed</h3><p>Docs-only edits, committed or not, and chat-only sessions never trigger a test run. Once a state is green, it isn’t retested on every message, unless a later run of it fails.</p></li>
+        <li><h3>Sends the agent back with the failure</h3><p>Red tests block the stop with pytest’s failure summary. If test files were edited, the agent is told not to weaken them.</p></li>
+        <li><h3>Stops looping, but never pretends</h3><p>After 2 fix cycles it lets the agent stop and shows “NOT verified”. A broken config or a timeout is never shown as green.</p></li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="study">
+    <div class="wrap">
+      <p class="label">Why tests decide, not a second model</p>
+      <h2>Require executable evidence, not a reviewer’s opinion.</h2>
+      <div class="study">
+        <p class="lede">In a July 2026 study (<a href="https://arxiv.org/abs/2607.21656">arXiv:2607.21656</a>, 116 tasks), model review without running tests went both ways: Codex reviewing Claude’s code lowered the share of correct solutions, Claude reviewing Codex’s raised it. A review can help or hurt; a test run is evidence either way. So in Prove It the test suite decides. Planned for Pro: mutation checks that show whether your tests catch a broken change.</p>
+        <div class="bars" role="img" aria-label="Pass rate: Codex reviewing Claude 91.4% to 82.8%; Claude reviewing Codex 71.6% to 89.7%">
+          <div class="bar-row">
+            <div class="bar-head"><span>Claude’s drafts, before review</span><b>91.4%</b></div>
+            <div class="track"><div class="fill before" style="width: 91.4%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-head"><span>…after Codex review (no test runs)</span><b>82.8%</b></div>
+            <div class="track"><div class="fill down" style="width: 82.8%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-head"><span>Codex’s drafts, before review</span><b>71.6%</b></div>
+            <div class="track"><div class="fill before" style="width: 71.6%"></div></div>
+          </div>
+          <div class="bar-row">
+            <div class="bar-head"><span>…after Claude review</span><b>89.7%</b></div>
+            <div class="track"><div class="fill up" style="width: 89.7%"></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="compare">
+    <div class="wrap">
+      <p class="label">Mini vs Pro</p>
+      <h2>Mini is the gate, available now. Pro is planned.</h2>
+      <p class="lede" style="margin-top: 12px">Pro isn’t built for release yet: it will ship only after it passes the same independent code review Mini went through. The Pro column lists what is planned, not what exists today.</p>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th scope="col">What you get</th><th scope="col" class="c">Mini · now</th><th scope="col" class="c">Pro · planned</th></tr></thead>
+          <tbody>
+            <tr><td>pytest gate: Stop hook, session baseline, 2 fix cycles, then a visible “NOT verified” warning</td><td class="c yes">yes</td><td class="c no">planned</td></tr>
+            <tr><td>Rules for Claude Code (<code>CLAUDE.md</code>) and Codex (<code>AGENTS.md</code>); Pro plans fuller rules and skills</td><td class="c yes">short</td><td class="c no">planned</td></tr>
+            <tr><td>Installer that installs only into a clean state and changes nothing if anything is in the way; uninstall keeps an edited gate file and removes the managed rules blocks, including your edits inside them</td><td class="c yes">yes</td><td class="c no">planned</td></tr>
+            <tr><td>Verification report: Stop-time failures, repairs, give-ups, test edits, time in tests</td><td class="c no">—</td><td class="c no">planned</td></tr>
+            <tr><td>Mutation checks for changed Python code: would your tests catch a broken change?</td><td class="c no">—</td><td class="c no">planned</td></tr>
+            <tr><td>Second-model review grounded in test output, compaction recovery, resumable long jobs</td><td class="c no">—</td><td class="c no">later, if asked</td></tr>
+            <tr><td>The kit’s own tests (no network)</td><td class="c">133</td><td class="c no">—</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="pricing">
+    <div class="wrap">
+      <p class="label">Get it</p>
+      <h2>Start free. Tell us if you want Pro.</h2>
+      <div class="plans">
+        <article class="plan">
+          <span class="pill">Available now</span>
+          <h3>Prove It Mini</h3>
+          <div class="price"><span class="amount">$0</span><span class="fine">MIT license</span></div>
+          <ul>
+            <li>The pytest gate and short rules for both agents</li>
+            <li>A recorded false-“done” example you can reproduce</li>
+            <li>Gate log of test runs (best-effort)</li>
+          </ul>
+          <a class="btn btn-ghost" href="https://github.com/OlegTestov/prove-it-mini">Download from GitHub</a>
+        </article>
+        <article class="plan pro">
+          <span class="pill">Planned · not on sale</span>
+          <h3>Prove It Pro</h3>
+          <div class="price"><span class="amount">$19</span><span class="fine">at launch · planned regular $29 one-time</span></div>
+          <ul>
+            <li>Planned: a verification report</li>
+            <li>Planned: mutation checks for changed Python code</li>
+            <li>Later, if asked: second-model review, compaction recovery, resumable long jobs</li>
+            <li>Ships only after an independent code review passes. Mini stays free.</li>
+          </ul>
+          <button class="btn btn-primary" id="buy-pro" type="button">Buy Pro — $19 at launch · Not available yet</button>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <section id="faq">
+    <div class="wrap">
+      <p class="label">Questions</p>
+      <h2>Before you install</h2>
+      <div class="faq">
+        <details><summary>Does it work without Codex?</summary><p>Yes. Mini needs only Claude Code, Python and pytest. Mini currently integrates with Codex through AGENTS.md instructions. It does not install Codex’s native Stop hook. The rule asks Codex to run the gate’s <code>--check</code> before reporting done; Mini can’t enforce it.</p></details>
+        <details><summary>Does it send my code anywhere?</summary><p>No. Mini’s hook makes no network calls: it runs your own test command locally and writes its log to <code>.prove-it/</code>, which the installer adds to git’s exclude list.</p></details>
+        <details><summary>What if my test suite is slow?</summary><p>Tests run only after the agent changed relevant files since the session started or since the last green run. You can narrow the command, for example <code>pytest -q -m "not slow"</code>, and set a timeout in <code>.claude/prove-it/config.json</code>. A timeout kills the test run’s process group.</p></details>
+        <details><summary>Can the agent just weaken the tests?</summary><p>The rules forbid it and the gate warns the agent whenever test files changed. The gate log records which test files changed. A determined agent can still edit a test: Prove It makes that visible, it doesn’t make it impossible.</p></details>
+        <details><summary>Windows?</summary><p>Via WSL. Native Windows isn’t tested.</p></details>
+      </div>
+    </div>
+  </section>
+</main>
+
+<dialog id="pro-panel" aria-labelledby="pro-title">
+  <div class="panel">
+    <h3 id="pro-title">Pro isn’t on sale yet</h3>
+    <p>Pro isn’t available to purchase yet. Leave your email for the launch announcement and $19 launch price. <strong>No payment details required.</strong></p>
+    <form id="waitlist" method="post" target="_blank" action="#" novalidate>
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" autocomplete="email" required placeholder="you@example.com">
+      <input type="hidden" name="embed" value="1">
+      <input type="hidden" name="tag" value="prove-it-pro">
+      <div class="hp" aria-hidden="true"><label>Leave empty <input name="website" tabindex="-1" autocomplete="off"></label></div>
+      <div class="row">
+        <button class="btn btn-primary" type="submit">Notify me</button>
+        <button class="btn btn-ghost" type="button" id="close-panel">Close</button>
+      </div>
+      <p class="status" id="status" role="status" aria-live="polite"></p>
+    </form>
+    <p class="fine">Mini is free today: <a href="https://github.com/OlegTestov/prove-it-mini">get it on GitHub</a>.</p>
+  </div>
+</dialog>
+
+<footer>
+  <div class="wrap">
+    <p>Prove It · Mini is MIT-licensed · Pro is not on sale yet.</p>
+    <p>Contact: Oleg Testov, Oviedo, Spain · <a href="mailto:os.testov@gmail.com">os.testov@gmail.com</a></p>
+    <p>Privacy: no cookies, no third-party scripts or fonts. <span id="counting-note">Right now nothing is counted: no analytics are set up.</span> If you join the waitlist, your email is stored by Buttondown and used once, to tell you when Pro is on sale; then it is deleted unless you buy or ask to stay. Data controller: Oleg Testov. You can ask to see or delete your email at any time by writing to the address above, or unsubscribe with one click from any email.</p>
+  </div>
+</footer>
+
+<script>
+  // ---- Owner settings (see landing/README.md) ----
+  // Sign-up endpoint: a form backend that accepts a POST with an "email" field.
+  const FORM_ENDPOINT = "https://buttondown.com/api/emails/embed-subscribe/olegtestov";
+  // Cookieless counter: your GoatCounter code (the "xyz" in xyz.goatcounter.com). Empty = count nothing.
+  const GOATCOUNTER_CODE = "proveit";
+  // When Pro is really for sale, put the checkout URL here and the button goes straight to it.
+  const CHECKOUT_URL = "";
+  // --------------------------------------------------
+
+  const configured = (v) => v && !v.includes("OWNER");
+
+  function count(path, title) {
+    if (!GOATCOUNTER_CODE) return;
+    const url = `https://${GOATCOUNTER_CODE}.goatcounter.com/count?p=${encodeURIComponent(path)}` +
+      `&t=${encodeURIComponent(title)}&e=true&rnd=${Math.random().toString(36).slice(2)}`;
+    try { navigator.sendBeacon ? navigator.sendBeacon(url) : (new Image().src = url); } catch (_) {}
+  }
+
+  if (GOATCOUNTER_CODE) {  // one page view, no cookies, no script from a third party
+    const pv = `https://${GOATCOUNTER_CODE}.goatcounter.com/count?p=${encodeURIComponent(location.pathname)}` +
+      `&r=${encodeURIComponent(document.referrer)}&rnd=${Math.random().toString(36).slice(2)}`;
+    try { navigator.sendBeacon ? navigator.sendBeacon(pv) : (new Image().src = pv); } catch (_) {}
+    document.getElementById("counting-note").textContent = "Page views and clicks on “Buy Pro” and “Get Mini” " +
+      "are counted anonymously by GoatCounter, without cookies or personal data.";
+  }
+
+  const panel = document.getElementById("pro-panel");
+  const status = document.getElementById("status");
+  const form = document.getElementById("waitlist");
+
+  document.getElementById("buy-pro").addEventListener("click", () => {
+    count("buy-pro-click", "Buy Pro clicked");
+    if (CHECKOUT_URL) { location.href = CHECKOUT_URL; return; }
+    status.textContent = ""; status.className = "status";
+    if (typeof panel.showModal === "function") panel.showModal(); else panel.setAttribute("open", "");
+    document.getElementById("email").focus();
+  });
+  document.getElementById("close-panel").addEventListener("click", () => panel.close ? panel.close() : panel.removeAttribute("open"));
+  document.querySelectorAll('a[href*="github.com/OlegTestov/prove-it-mini"], #get-mini').forEach((a) =>
+    a.addEventListener("click", () => count("mini-download-click", "Get Mini clicked")));
+
+  if (configured(FORM_ENDPOINT)) form.action = FORM_ENDPOINT;
+  // The provider's own form endpoint answers in a new tab (with its confirmation / double opt-in page).
+  // This page cannot see that answer, so it never claims the sign-up worked and counts no sign-up.
+  form.addEventListener("submit", (e) => {
+    const email = form.email.value.trim();
+    if (form.website.value) { e.preventDefault(); return; }  // a bot filled the hidden field
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      e.preventDefault();
+      status.textContent = "Please enter a valid email address."; status.className = "status err"; return;
+    }
+    if (!configured(FORM_ENDPOINT)) {
+      e.preventDefault();
+      status.textContent = "Sign-up isn't connected yet (preview). Nothing was sent."; status.className = "status err"; return;
+    }
+    status.textContent = "The sign-up page opened in a new tab. Check your inbox to confirm your email; " +
+      "you're only on the list after confirming. No payment was taken.";
+    status.className = "status";
+  });
+</script>
+</body>
+</html>

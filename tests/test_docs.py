@@ -169,6 +169,32 @@ class LoggingDocsTests(unittest.TestCase):
         self.assertIn("best-effort", texts[KIT / "README.md"])
 
 
+class ClaimsDocsTests(unittest.TestCase):
+    POSITIONING = "A pytest Stop hook for Claude Code: two repair attempts, then an explicit unverified result."
+    CODEX = "Mini currently integrates with Codex through AGENTS.md instructions. It does not install Codex's native Stop hook."
+
+    def test_texts_make_no_absolute_promise_and_state_codex_support_correctly(self):
+        paths = [KIT / "README.md", KIT / "install.sh", KIT / ".claude-plugin/plugin.json",
+                 KIT / ".claude-plugin/marketplace.json", *([LANDING] if LANDING.exists() else [])]
+        for path in paths:
+            text = path.read_text().replace("\u2019", "'")
+            self.assertIsNone(re.search(r"(?i)can't say|cannot finish while|has no Stop hook|none of the free", text),
+                              f"{path.name} still makes an absolute claim")
+        readme = (KIT / "README.md").read_text()
+        self.assertIn(self.POSITIONING, readme)
+        self.assertIn(self.CODEX, readme)
+        self.assertIn("No signup. No reviewer model. MIT.", readme)
+        if not (KIT / "example/demo.gif").exists():                  # a link to a missing GIF shows a broken image
+            self.assertNotIn("demo.gif", re.sub(r"(?s)<!--.*?-->", "", readme))
+
+    def test_the_landing_page_states_the_real_test_count(self):
+        if not LANDING.exists():
+            self.skipTest("landing page is not part of the kit zip")
+        count = sum(len(re.findall(r"(?m)^    def test_", f.read_text())) for f in (KIT / "tests").glob("test_*.py"))
+        shown = re.search(r'<td>The kit’s own tests \(no network\)</td><td class="c">(\d+)</td>', LANDING.read_text())
+        self.assertEqual(int(shown.group(1)) if shown else None, count, "landing/index.html: wrong test count")
+
+
 
 if __name__ == "__main__":
     unittest.main()
