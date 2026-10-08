@@ -46,18 +46,18 @@ When the tests are still red after 2 fix cycles, the agent may stop, and the gat
 
 ## Similar tools
 
-Facts from their READMEs as of 07.10.2026; "—" means the README doesn't cover it.
+Facts from their READMEs as of 07.10.2026 (isitdone: 09.10.2026); "—" means the README doesn't cover it.
 
-| | Prove-It Mini | [Nonna](https://github.com/kapadias/nonna) | [TDD Guard](https://github.com/nizos/tdd-guard) | [Probity](https://github.com/nizos/probity) |
-|---|---|---|---|---|
-| When it checks | when the agent tries to finish after changing code | same, plus git commit/push and file access | when the agent changes code | before every file write and shell command |
-| What it checks | your test command passes | your test command passes; branch and secret guards | TDD: a failing test first | your rules (TDD, patterns, custom) |
-| After a red run | blocks up to 2 times, then "NOT verified" | blocks once, then tells the agent to say it is not done | — | — |
-| Changed test files | named in every result | rules forbid weakening; "no gate checks yet" | — | — |
-| Model calls | none | none | yes | none for pattern rules; AI rules optional |
-| Agents | Claude Code (Codex: AGENTS.md only) | Claude Code; Codex and Copilot plugins (not yet run end to end); rules for others | Claude Code | Claude Code, Codex, Copilot CLI |
+| | Prove-It Mini | [Nonna](https://github.com/kapadias/nonna) | [isitdone](https://github.com/raimondasl/isitdone) | [TDD Guard](https://github.com/nizos/tdd-guard) | [Probity](https://github.com/nizos/probity) |
+|---|---|---|---|---|---|
+| When it checks | when the agent tries to finish after changing code | same, plus git commit/push and file access | when the agent tries to finish; by default the tests run only if its last message claims completion (typecheck and lint on every stop) | when the agent changes code | before every file write and shell command |
+| What it checks | your test command passes | your test command passes; branch and secret guards | the test, typecheck, lint and build commands it detects (JS/TS, Python, Go and more) | TDD: a failing test first | your rules (TDD, patterns, custom) |
+| After a red run | blocks up to 2 times, then "NOT verified" | blocks once, then tells the agent to say it is not done | blocks up to 3 times, then a visible warning | — | — |
+| Changed test files | named in every result | rules forbid weakening; "no gate checks yet" | scans the diff for weakened tests; warns, blocks with `--strict` | — | — |
+| Model calls | none | none | none | yes | none for pattern rules; AI rules optional |
+| Agents | Claude Code (Codex: AGENTS.md only) | Claude Code; Codex and Copilot plugins (not yet run end to end); rules for others | Claude Code, Codex, Cursor, Gemini CLI, Copilot CLI and 7 more (Node 20+) | Claude Code | Claude Code, Codex, Copilot CLI |
 
-Nonna does more (git hooks, secret and branch guards, many agents). Mini does one thing: the pytest check at the end of a turn, with bounded retries and named test edits. TDD Guard and Probity enforce a way of working on each action; TDD Guard's README recommends Probity for new projects.
+Nonna and isitdone do more: Nonna adds git hooks and secret and branch guards; isitdone covers more languages, checks and agents, and adds receipts and a GitHub Action. Mini does one thing: the pytest check at the end of a turn after any relevant code change, with bounded retries and named test edits, on the Python standard library. TDD Guard and Probity enforce a way of working on each action; TDD Guard's README recommends Probity for new projects.
 
 **Codex:** Mini currently integrates with Codex through AGENTS.md instructions. It does not install Codex's native Stop hook. The `AGENTS.md` block tells Codex to run `pytest_gate.py --check` and paste the output before reporting done; Mini can't enforce that.
 
