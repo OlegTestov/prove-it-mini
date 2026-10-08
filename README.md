@@ -40,6 +40,10 @@ with:     agent> Done. I've added the HALF discount code to shop/pricing.py.
 log:      BLOCKED cycle 1/2 -> PASS. Cost of the catch: one fix cycle, 13 seconds.
 ```
 
+When the tests are still red after 2 fix cycles, the agent may stop, and the gate says "NOT verified" (here a payments test needs a sandbox URL that only CI has; [script](example/demo-unverified.sh)):
+
+![Recorded run: blocked twice on a test it can't fix, then NOT verified](example/demo-unverified.gif)
+
 ## Similar tools
 
 Facts from their READMEs as of 07.10.2026; "—" means the README doesn't cover it.

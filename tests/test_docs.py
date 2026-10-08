@@ -184,8 +184,8 @@ class ClaimsDocsTests(unittest.TestCase):
         self.assertIn(self.POSITIONING, readme)
         self.assertIn(self.CODEX, readme)
         self.assertIn("No signup. No reviewer model. MIT.", readme)
-        if not (KIT / "example/demo.gif").exists():                  # a link to a missing GIF shows a broken image
-            self.assertNotIn("demo.gif", re.sub(r"(?s)<!--.*?-->", "", readme))
+        for gif in re.findall(r"\]\((example/[\w.-]+\.gif)\)", re.sub(r"(?s)<!--.*?-->", "", readme)):
+            self.assertTrue((KIT / gif).exists(), f"README links a missing {gif}")   # it would show a broken image
 
     def test_the_landing_page_states_the_real_test_count(self):
         if not LANDING.exists():
