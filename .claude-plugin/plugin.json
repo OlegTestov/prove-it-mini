@@ -7,8 +7,20 @@
     "name": "Oleg Testov",
     "url": "https://github.com/OlegTestov"
   },
-  "homepage": "https://github.com/OlegTestov/prove-it-mini",
+  "homepage": "https://olegtestov.github.io/prove-it-mini/",
   "repository": "https://github.com/OlegTestov/prove-it-mini",
   "license": "MIT",
-  "keywords": ["pytest", "testing", "stop-hook", "verification", "python"]
+  "keywords": [
+    "pytest",
+    "testing",
+    "stop-hook",
+    "verification",
+    "python"
+  ],
+  "interface": {
+    "displayName": "Prove-It Mini",
+    "websiteURL": "https://olegtestov.github.io/prove-it-mini/",
+    "privacyPolicyURL": "https://olegtestov.github.io/prove-it-mini/privacy.html",
+    "termsOfServiceURL": "https://olegtestov.github.io/prove-it-mini/terms.html"
+  }
 }
